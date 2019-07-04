@@ -79,7 +79,7 @@ function uploadFiles(authenticationToken){
       }
       if (chunkStatus == CONTINUE_UPLOAD){
         //console.log("Successfully uploaded chunk " + i);
-        var percentageProgress = chunkEnd / fileSize;
+        var percentageProgress = chunkEnd / fileSize * 100;
         progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
       }
       

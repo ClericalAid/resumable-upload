@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+  <input type="file" id="fileToUpload">
+  <input type="submit" onclick="submitFiles()">
+</html>
+
+<script>
+var chunkSize = 5*1024*1024;
+const CONTINUE_UPLOAD = 308;
+const UPLOAD_COMPLETE = 200;
+
+/**
+ *  submitFiles()
+ *    Gets the authentication token and runs the uploadFiles function with it.
+ */
+function submitFiles(){
+  google.script.run.withSuccessHandler(uploadFiles).getAuthenticationToken();
+}
+
+/**
+ *  uploadFiles(authenticationToken)
+ *  parameters:
+ *    authenticationToken
+ *      This variable was given to us when we ran the google script function with the success handler
+ *  Steps for success:
+ *  1)  Divide the files into chunks of at most 5MB
+ *  2)  Initiate a resumable upload session. They will return to us a URI for the location
+ *  3)  Begin a for loop to upload the file chunk by chunk
+ *  TODO: Implement pause and resume? Maybe not a pause, but at least a resume?
+ */
+function uploadFiles(authenticationToken){
+  var allFiles = document.getElementById("fileToUpload").files;
+  if (allFiles.size == 0){
+    console.log("No files were found")
+    return false;
+  }
+  
+  // 1) Dividing the files into chunks
+  var file = allFiles[0];
+  var fileSize = file.size;
+  var chunk = 0;
+  var chunkCount = Math.ceil(fileSize/chunkSize);
+  var chunkArray = new Array();
+  for (var i = 0; i < chunkCount; ++i){
+    offset = chunkSize*i;
+    chunkArray.push(file.slice(offset, offset + chunkSize));
+  }
+  
+  console.log(chunkArray);
+  
+  // 2) Initiate a resumable upload session
+  console.log("Token: " + authenticationToken);
+  var restRequest = new XMLHttpRequest();
+  restRequest.open("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
+  restRequest.setRequestHeader('Authorization', "Bearer " + authenticationToken);
+  restRequest.setRequestHeader('Content-Type', "application/json");
+  
+  restRequest.send(JSON.stringify({
+    mimeType: file.type,
+    name: file.name
+  }));
+  
+  // 3) Begin uploading the files in chunks
+  restRequest.onload = async function(){
+    var locationURI = this.getResponseHeader("location");
+    console.log(locationURI);
+    for (var i = 0; i < chunkCount; ++i){
+      var offset = chunkSize * i;
+      var chunkEnd = offset + chunkArray[i].size - 1;
+      contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileSize;
+      var chunkStatus = await uploadChunk(locationURI, chunkArray[i], contentRange);
+      if (chunkStatus == UPLOAD_COMPLETE){
+        console.log("Upload complete!");
+      }
+      if (chunkStatus == CONTINUE_UPLOAD){
+        // continue the upload?
+        console.log("Successfully uploaded chunk " + i);
+      }
+    }
+  }
+}
+
+/**
+ *  uploadChunk
+ *  parameters:
+ *    locationURI
+ *      The URI of where the file will be uploaded to
+ *    chunk
+ *      The "chunk" of the file that we are uploading
+ *    contentRange
+ *      The description of the bytes that we are uploading. E.g. "bytes 0-10000/50000"
+ *  Uploads a segment of a file to the specified URI. The settings are toggled to work
+ *  with google drive.
+ *  TODO: Add onedrive functionality? With a google script? Awesome!
+ */
+function uploadChunk(locationURI, chunk, contentRange) {
+  return new Promise((resolve, reject) => {
+    var uploadChunkRequest = new XMLHttpRequest();
+    uploadChunkRequest.open("PUT", locationURI);
+    uploadChunkRequest.setRequestHeader('Content-Range', contentRange);
+    uploadChunkRequest.onload = () => resolve(uploadChunkRequest.status);
+    uploadChunkRequest.onerror = () => reject(uploadChunkRequest.status);
+    uploadChunkRequest.send(chunk);
+  });
+}
+
+</script>

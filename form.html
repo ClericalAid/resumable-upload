@@ -10,12 +10,11 @@
   </body>
 </html>
 
-<script>
+<script src="https://apis.google.com/js/api.js?onload=onApiLoad">
 var chunkSize = 5*1024*1024;
 const CONTINUE_UPLOAD = 308;
 const UPLOAD_COMPLETE = 200;
 const UPLOADING_TEXT = "Uploading... "
-
 /**
  *  submitFiles()
  *    Gets the authentication token and runs the uploadFiles function with it.
@@ -23,7 +22,6 @@ const UPLOADING_TEXT = "Uploading... "
 function submitFiles(){
   google.script.run.withSuccessHandler(uploadFiles).getAuthenticationToken();
 }
-
 /**
  *  uploadFiles(authenticationToken)
  *  parameters:
@@ -91,7 +89,6 @@ function uploadFiles(authenticationToken){
     }
   }
 }
-
 /**
  *  uploadChunk
  *  parameters:
@@ -115,5 +112,4 @@ function uploadChunk(locationURI, chunk, contentRange) {
     uploadChunkRequest.send(chunk);
   });
 }
-
 </script>

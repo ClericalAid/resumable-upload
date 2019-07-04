@@ -1,7 +1,5 @@
 function doGet() {
-  var output = HtmlService.createHtmlOutputFromFile('form.html');
-  output.setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-  return output;
+  return HtmlService.createTemplateFromFile('form').evaluate().setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function getAuthenticationToken(){

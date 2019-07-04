@@ -2,12 +2,14 @@
 <html>
   <input type="file" id="fileToUpload">
   <input type="submit" onclick="submitFiles()">
+  <p id= "progressIndicator"></p>
 </html>
 
 <script>
 var chunkSize = 5*1024*1024;
 const CONTINUE_UPLOAD = 308;
 const UPLOAD_COMPLETE = 200;
+const UPLOADING_TEXT = "Uploading... "
 
 /**
  *  submitFiles()
@@ -29,6 +31,7 @@ function submitFiles(){
  *  TODO: Implement pause and resume? Maybe not a pause, but at least a resume?
  */
 function uploadFiles(authenticationToken){
+  var progressIndicator = document.getElementById("progressIndicator");
   var allFiles = document.getElementById("fileToUpload").files;
   if (allFiles.size == 0){
     console.log("No files were found")
@@ -61,6 +64,7 @@ function uploadFiles(authenticationToken){
   }));
   
   // 3) Begin uploading the files in chunks
+  progressIndicator.innerHTML = UPLOADING_TEXT + "0%";
   restRequest.onload = async function(){
     var locationURI = this.getResponseHeader("location");
     console.log(locationURI);
@@ -70,12 +74,15 @@ function uploadFiles(authenticationToken){
       contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileSize;
       var chunkStatus = await uploadChunk(locationURI, chunkArray[i], contentRange);
       if (chunkStatus == UPLOAD_COMPLETE){
-        console.log("Upload complete!");
+        progressIndicator.innerHTML = UPLOADING_TEXT + "100%"
+        //console.log("Upload complete!");
       }
       if (chunkStatus == CONTINUE_UPLOAD){
-        // continue the upload?
-        console.log("Successfully uploaded chunk " + i);
+        //console.log("Successfully uploaded chunk " + i);
+        var percentageProgress = chunkEnd / fileSize;
+        progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
       }
+      
     }
   }
 }

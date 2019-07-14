@@ -5,6 +5,8 @@
   </head>
   <body>
     <input type="file" id="fileToUpload">
+    <button onclick="pauseUpload()">Pause</button>
+    <button onClick="resumeUpload()">Resume</button>
     <input type="submit" onclick="submitFiles()">
     <p id= "progressIndicator"></p>
   </body>
@@ -12,9 +14,12 @@
 
 <script>
 var chunkSize = 5*1024*1024;
+var locationURI;
+var pauseUpload = false;
 const CONTINUE_UPLOAD = 308;
 const UPLOAD_COMPLETE = 200;
 const UPLOADING_TEXT = "Uploading... "
+
 /**
  *  submitFiles()
  *    Gets the authentication token and runs the uploadFiles function with it.
@@ -22,11 +27,13 @@ const UPLOADING_TEXT = "Uploading... "
 function submitFiles(){
   google.script.run.withSuccessHandler(uploadFiles).getAuthenticationToken();
 }
+
 /**
  *  uploadFiles(authenticationToken)
  *  parameters:
  *    authenticationToken
- *      This variable was given to us when we ran the google script function with the success handler
+ *      This variable was given to us when we ran the google script function with the success
+ *      handler.
  *  Steps for success:
  *  1)  Divide the files into chunks of at most 5MB
  *  2)  Initiate a resumable upload session. They will return to us a URI for the location
@@ -43,17 +50,8 @@ function uploadFiles(authenticationToken){
   
   // 1) Dividing the files into chunks
   var file = allFiles[0];
-  var fileSize = file.size;
-  var chunk = 0;
-  var chunkCount = Math.ceil(fileSize/chunkSize);
-  var chunkArray = new Array();
-  for (var i = 0; i < chunkCount; ++i){
-    offset = chunkSize*i;
-    chunkArray.push(file.slice(offset, offset + chunkSize));
-  }
-  
-  console.log(chunkArray);
-  
+  fileChunks = divideFile(file);
+
   // 2) Initiate a resumable upload session
   console.log("Token: " + authenticationToken);
   var restRequest = new XMLHttpRequest();
@@ -69,13 +67,13 @@ function uploadFiles(authenticationToken){
   // 3) Begin uploading the files in chunks
   progressIndicator.innerHTML = UPLOADING_TEXT + "0%";
   restRequest.onload = async function(){
-    var locationURI = this.getResponseHeader("location");
+    locationURI = this.getResponseHeader("location");
     console.log(locationURI);
-    for (var i = 0; i < chunkCount; ++i){
+    for (var i = 0; i < fileChunks.chunkCount; ++i){
       var offset = chunkSize * i;
-      var chunkEnd = offset + chunkArray[i].size - 1;
+      var chunkEnd = offset + fileChunks.chunkArray[i].size - 1;
       contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileSize;
-      var chunkStatus = await uploadChunk(locationURI, chunkArray[i], contentRange);
+      var chunkStatus = await uploadChunk(locationURI, fileChunks.chunkArray[i], contentRange);
       if (chunkStatus == UPLOAD_COMPLETE){
         progressIndicator.innerHTML = UPLOADING_TEXT + "100%"
         //console.log("Upload complete!");
@@ -85,10 +83,48 @@ function uploadFiles(authenticationToken){
         var percentageProgress = chunkEnd / fileSize * 100;
         progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
       }
-      
+      if (pauseUpload == true){
+        progressIndicator.innerHTML = "Upload paused"
+        break;
+      }
     }
   }
 }
+
+/**
+ * pauseUpload
+ * Pauses the upload by switching a global boolean
+ */
+function pauseUpload(){
+  pauseUpload = true;
+  console.log(locationURI);
+}
+
+/**
+ *  divideFile
+ *  parameters:
+ *    file
+ *      The file object which will be split into chunks
+ *  Splits a file into chunks and returns the object which organizes said chunks
+ *
+ *  Calculate the total amount of chunks by dividing the file size by the chunk size. Split up
+ *  said file into chunks and push them into an array.
+ */
+function divideFile(file){
+  var fileChunks = {};
+  fileChunks.totalSize = file.size;
+  fileChunks.chunkCount = Math.ceil(file.size/chunkSize);
+  fileChunks.chunkArray = new Array();
+  for (var i = 0; i < chunkCount; ++i){
+    offset = chunkSize*i;
+    fileChunks.chunkArray.push(file.slice(offset, offset + chunkSize));
+  }
+  
+  console.log(fileChunks);
+ 
+  return fileChunks;
+}
+
 /**
  *  uploadChunk
  *  parameters:

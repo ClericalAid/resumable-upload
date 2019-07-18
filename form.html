@@ -5,8 +5,8 @@
   </head>
   <body>
     <input type="file" id="fileToUpload">
-    <button onclick="pauseUpload()">Pause</button>
-    <button onClick="resumeUpload()">Resume</button>
+    <input type="button" onclick="pauseUpload()" value="Pause">
+    <input type="button" onclick="resumeUpload()" value="Resume">
     <input type="submit" onclick="submitFiles()">
     <p id= "progressIndicator"></p>
   </body>
@@ -15,89 +15,124 @@
 <script>
 var chunkSize = 5*1024*1024;
 var locationURI;
-var pauseUpload = false;
+var pauseRequested = false;
+var resumingUpload = false;
+var beginningUpload = true;
+var progressIndicator;
+var file;
+
 const CONTINUE_UPLOAD = 308;
 const UPLOAD_COMPLETE = 200;
 const UPLOADING_TEXT = "Uploading... "
 
 /**
- *  submitFiles()
- *    Gets the authentication token and runs the uploadFiles function with it.
+ *  submitFiles
+ *    Gets the authentication token and runs the uploadFile function with it.
  */
-function submitFiles(){
-  google.script.run.withSuccessHandler(uploadFiles).getAuthenticationToken();
+async function submitFiles(){
+  var allFiles = document.getElementById("fileToUpload").files;
+  if (allFiles.size == 0){
+    console.log("No files were found");
+    return false;
+  }
+  file = allFiles[0];
+  google.script.run.withSuccessHandler(getLocationURI).getAuthenticationToken();
 }
 
 /**
- *  uploadFiles(authenticationToken)
- *  parameters:
- *    authenticationToken
- *      This variable was given to us when we ran the google script function with the success
- *      handler.
- *  Steps for success:
- *  1)  Divide the files into chunks of at most 5MB
- *  2)  Initiate a resumable upload session. They will return to us a URI for the location
- *  3)  Begin a for loop to upload the file chunk by chunk
- *  TODO: Implement pause and resume? Maybe not a pause, but at least a resume?
+ *  uploadFile()
+ *
+ *  1)  Divides the files into chunks
+ *  2)  Verifies whether we are resuming an upload, or starting from scratch
+ *    2a) Starting from scratch:
+ *        Upload the file starting from chunk 0
+ *    2b) Starting from a resume point:
+ *        Upload the file starting from the resume point?
  */
-function uploadFiles(authenticationToken){
-  var progressIndicator = document.getElementById("progressIndicator");
-  var allFiles = document.getElementById("fileToUpload").files;
-  if (allFiles.size == 0){
-    console.log("No files were found")
-    return false;
-  }
+async function uploadFile(){
+  progressIndicator = document.getElementById("progressIndicator");
+  var startingChunk = 0;
   
   // 1) Dividing the files into chunks
-  var file = allFiles[0];
   fileChunks = divideFile(file);
 
-  // 2) Initiate a resumable upload session
-  console.log("Token: " + authenticationToken);
-  var restRequest = new XMLHttpRequest();
-  restRequest.open("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
-  restRequest.setRequestHeader('Authorization', "Bearer " + authenticationToken);
-  restRequest.setRequestHeader('Content-Type', "application/json");
-  
-  restRequest.send(JSON.stringify({
-    mimeType: file.type,
-    name: file.name
-  }));
-  
+  // 2a) Starting from scratch, meaning we have been called by the rest request
+
+  // 2b) We are resuming from some arbitrary point
+
   // 3) Begin uploading the files in chunks
-  progressIndicator.innerHTML = UPLOADING_TEXT + "0%";
-  restRequest.onload = async function(){
-    locationURI = this.getResponseHeader("location");
-    console.log(locationURI);
-    for (var i = 0; i < fileChunks.chunkCount; ++i){
-      var offset = chunkSize * i;
-      var chunkEnd = offset + fileChunks.chunkArray[i].size - 1;
-      contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileSize;
-      var chunkStatus = await uploadChunk(locationURI, fileChunks.chunkArray[i], contentRange);
-      if (chunkStatus == UPLOAD_COMPLETE){
-        progressIndicator.innerHTML = UPLOADING_TEXT + "100%"
-        //console.log("Upload complete!");
-      }
-      if (chunkStatus == CONTINUE_UPLOAD){
-        //console.log("Successfully uploaded chunk " + i);
-        var percentageProgress = chunkEnd / fileSize * 100;
-        progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
-      }
-      if (pauseUpload == true){
-        progressIndicator.innerHTML = "Upload paused"
-        break;
-      }
+  progressIndicator.innerHTML = UPLOADING_TEXT;
+  console.log(locationURI);
+  for (var i = startingChunk; i < fileChunks.chunkCount; ++i){
+    var offset = chunkSize * i;
+    var chunkEnd = offset + fileChunks.chunkArray[i].size - 1;
+    contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileChunks.fileSize;
+    var chunkStatus = await uploadChunk(locationURI, fileChunks.chunkArray[i], contentRange);
+    if (chunkStatus == UPLOAD_COMPLETE){
+      progressIndicator.innerHTML = UPLOADING_TEXT  + "100%"
+    }
+    if (chunkStatus == CONTINUE_UPLOAD){
+      var percentageProgress = chunkEnd / fileChunks.fileSize * 100;
+      progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
+    }
+    if (pauseRequested == true){
+      progressIndicator.innerHTML = "Upload paused"
+      return;
     }
   }
 }
 
 /**
- * pauseUpload
- * Pauses the upload by switching a global boolean
+ *  pauseUpload
+ *  Pauses the upload by switching a global boolean
  */
 function pauseUpload(){
-  pauseUpload = true;
+  pauseRequested = true;
   console.log(locationURI);
+}
+
+/**
+ *  resumeUpload
+ *  Tries to resume the upload? Via the main loop? Can the main loop do this?
+ */
+function resumeUpload(){
+  pauseRequested = false;
+  if (locationURI){
+    resumingUpload = true;
+  }
+  console.log(locationURI); 
+  uploadFile();
+}
+
+/**
+ *  getLocationURI
+ *  parameters:
+ *    authenticationToken
+ */
+function getLocationURI(authenticationToken){
+  console.log("Token: " + authenticationToken);
+
+  var requestPromise = new Promise(function(resolve, reject) {
+    var restRequest = new XMLHttpRequest();
+    restRequest.open("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable");
+    restRequest.setRequestHeader('Authorization', "Bearer " + authenticationToken);
+    restRequest.setRequestHeader('Content-Type', "application/json");
+    restRequest.onload = () => resolve(restRequest.getResponseHeader("location"));
+    restRequest.onerror = () => reject(null);
+    restRequest.send(JSON.stringify({
+      mimeType: file.type,
+      name: file.name
+    }));
+  });
+
+  requestPromise.then(function(responseHeader){
+    if (responseHeader == null){
+      console.log("No response header");
+      return;
+    }
+    locationURI = responseHeader;
+    uploadFile();
+  });
 }
 
 /**
@@ -112,10 +147,10 @@ function pauseUpload(){
  */
 function divideFile(file){
   var fileChunks = {};
-  fileChunks.totalSize = file.size;
+  fileChunks.fileSize = file.size;
   fileChunks.chunkCount = Math.ceil(file.size/chunkSize);
   fileChunks.chunkArray = new Array();
-  for (var i = 0; i < chunkCount; ++i){
+  for (var i = 0; i < fileChunks.chunkCount; ++i){
     offset = chunkSize*i;
     fileChunks.chunkArray.push(file.slice(offset, offset + chunkSize));
   }

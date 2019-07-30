@@ -14,69 +14,79 @@
 
 <script>
 var chunkSize = 5*1024*1024;
-var locationURI;
+var locationURI = null;
 var pauseRequested = false;
 var resumingUpload = false;
 var beginningUpload = true;
 var progressIndicator;
 var file;
+var fileChunks;
 
 const CONTINUE_UPLOAD = 308;
 const UPLOAD_COMPLETE = 200;
+const SERVICE_UNAVAILABLE = 503;
 const UPLOADING_TEXT = "Uploading... "
+const FIVE_SECONDS = 5000;
 
 /**
  *  submitFiles
  *    Gets the authentication token and runs the uploadFile function with it.
+ *  We divide the file into chunks, and then proceed to upload it
  */
 async function submitFiles(){
+  pauseRequested = false;
   var allFiles = document.getElementById("fileToUpload").files;
   if (allFiles.size == 0){
     console.log("No files were found");
     return false;
   }
   file = allFiles[0];
+  fileChunks = divideFile(file);
   google.script.run.withSuccessHandler(getLocationURI).getAuthenticationToken();
 }
 
 /**
  *  uploadFile()
- *
- *  1)  Divides the files into chunks
- *  2)  Verifies whether we are resuming an upload, or starting from scratch
- *    2a) Starting from scratch:
- *        Upload the file starting from chunk 0
- *    2b) Starting from a resume point:
- *        Upload the file starting from the resume point?
+ *  parameters
+ *    startingChunk
+ *      The chunk where we are starting (an integer which depicts the array index to start at)
+ *  Uploads the file starting from the starting chunk that was passed in.
  */
-async function uploadFile(){
+async function uploadFile(startingChunk = 0){
   progressIndicator = document.getElementById("progressIndicator");
-  var startingChunk = 0;
-  
-  // 1) Dividing the files into chunks
-  fileChunks = divideFile(file);
 
-  // 2a) Starting from scratch, meaning we have been called by the rest request
-
-  // 2b) We are resuming from some arbitrary point
-
-  // 3) Begin uploading the files in chunks
   progressIndicator.innerHTML = UPLOADING_TEXT;
   console.log(locationURI);
   for (var i = startingChunk; i < fileChunks.chunkCount; ++i){
-    var offset = chunkSize * i;
+    if (pauseRequested == true){
+      progressIndicator.innerHTML = "Upload paused"
+      return;
+    }
+
+    var offset = chunkSize * i + fileChunks.firstByte;
     var chunkEnd = offset + fileChunks.chunkArray[i].size - 1;
-    contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileChunks.fileSize;
-    var chunkStatus = await uploadChunk(locationURI, fileChunks.chunkArray[i], contentRange);
+    var contentRange = "bytes " + offset + "-" + chunkEnd + "/" + fileChunks.fileSize;
+    console.log(contentRange);
+    try{
+      var chunkStatus = await uploadChunk(locationURI, fileChunks.chunkArray[i], contentRange);
+    }
+    catch{
+      progressIndicator.innerHTML = "Check your internet connection and attempt to resume";
+      return;
+    }
     if (chunkStatus == UPLOAD_COMPLETE){
       progressIndicator.innerHTML = UPLOADING_TEXT  + "100%"
     }
-    if (chunkStatus == CONTINUE_UPLOAD){
+    else if (chunkStatus == CONTINUE_UPLOAD){
       var percentageProgress = chunkEnd / fileChunks.fileSize * 100;
       progressIndicator.innerHTML = UPLOADING_TEXT + percentageProgress.toPrecision(5)  + "%";
     }
-    if (pauseRequested == true){
-      progressIndicator.innerHTML = "Upload paused"
+    else if (chunkStatus == SERVICE_UNAVAILABLE){
+      progressIndicator.innerHTML = "Check your internet connection and attempt to resume";
+      return;
+    }
+    else{
+      progressIndicator.innerHTML = "Check your internet connection and attempt to resume";
       return;
     }
   }
@@ -88,20 +98,57 @@ async function uploadFile(){
  */
 function pauseUpload(){
   pauseRequested = true;
-  console.log(locationURI);
+  progressIndicator = document.getElementById("progressIndicator");
+  progressIndicator.innerHTML = "Pausing upload...";
 }
 
 /**
  *  resumeUpload
- *  Tries to resume the upload? Via the main loop? Can the main loop do this?
+ *  1) Call google to find where we are in the file upload
+ *  2) Set up a new starting point in the file upload
+ *  3) Resume the upload from that starting point
  */
 function resumeUpload(){
   pauseRequested = false;
-  if (locationURI){
-    resumingUpload = true;
+  progressIndicator = document.getElementById("progressIndicator");
+  progressIndicator.innerHTML = "Resuming upload...";
+
+  if (locationURI == null){
+    console.log("No upload to resume!");
+    return;
   }
+
   console.log(locationURI); 
-  uploadFile();
+
+  var contentRange = "bytes */" + fileChunks.fileSize;
+
+  // 1)
+  var requestPromise = new Promise(function(resolve, reject) {
+    var restRequest = new XMLHttpRequest();
+    restRequest.open("PUT", locationURI);
+    restRequest.setRequestHeader('Content-Range', contentRange);
+    restRequest.onload = () => resolve(restRequest.getResponseHeader("Range"));
+    restRequest.onerror = () => reject(null);
+    restRequest.send();
+  });
+
+  requestPromise.then(function(responseRange){
+    if (responseRange == null){
+      return false;
+    }
+
+    parsedResponse = responseRange.split("-");
+
+    // 2)
+    var bytesUploaded = parseInt(parsedResponse.pop());
+    bytesUploaded += 1;
+    fileChunks = divideFile(file, bytesUploaded);
+
+    console.log(responseRange);
+
+    // 3)
+    uploadFile();
+  });
 }
 
 /**
@@ -130,6 +177,7 @@ function getLocationURI(authenticationToken){
       console.log("No response header");
       return;
     }
+
     locationURI = responseHeader;
     uploadFile();
   });
@@ -140,24 +188,28 @@ function getLocationURI(authenticationToken){
  *  parameters:
  *    file
  *      The file object which will be split into chunks
+ *    firstByte
+ *      The first byte which we wish to upload. For example: if the file is 20,000,000 bytes large,
+ *      and we wish to upload the second half of it, then we set firstByte to 10,000,000
  *  Splits a file into chunks and returns the object which organizes said chunks
  *
  *  Calculate the total amount of chunks by dividing the file size by the chunk size. Split up
  *  said file into chunks and push them into an array.
  */
-function divideFile(file){
-  var fileChunks = {};
-  fileChunks.fileSize = file.size;
-  fileChunks.chunkCount = Math.ceil(file.size/chunkSize);
-  fileChunks.chunkArray = new Array();
-  for (var i = 0; i < fileChunks.chunkCount; ++i){
-    offset = chunkSize*i;
-    fileChunks.chunkArray.push(file.slice(offset, offset + chunkSize));
+function divideFile(file, firstByte = 0){
+  var blobChunks = {};
+  blobChunks.fileSize = file.size;
+  blobChunks.chunkCount = Math.ceil((file.size - firstByte)/chunkSize);
+  blobChunks.chunkArray = new Array();
+  blobChunks.firstByte = firstByte;
+  for (var i = 0; i < blobChunks.chunkCount; ++i){
+    offset = chunkSize*i + firstByte;
+    blobChunks.chunkArray.push(file.slice(offset, offset + chunkSize));
   }
   
-  console.log(fileChunks);
+  console.log(blobChunks);
  
-  return fileChunks;
+  return blobChunks;
 }
 
 /**
@@ -182,5 +234,9 @@ function uploadChunk(locationURI, chunk, contentRange) {
     uploadChunkRequest.onerror = () => reject(uploadChunkRequest.status);
     uploadChunkRequest.send(chunk);
   });
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 </script>
